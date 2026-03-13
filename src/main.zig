@@ -23,10 +23,11 @@ fn printUsage() void {
         \\  ls [flags]        List items at current marker
         \\  add <name>        Add folder or query
         \\  add <ref> [name]  Add reference to file/directory
-        \\  delete <name>     Delete item
-        \\  rename <old> <new> Rename item
-        \\  move <name> <dir> Move item to directory
-        \\  read <name>       Show item details
+        \\  delete <path>     Delete item
+        \\  rename <path> <new> Rename item
+        \\  rename -s <path> <new> Rename reference and source target
+        \\  move <path> <dir> Move item to directory
+        \\  read <path>       Show item details
         \\  query-edit <name> Edit query definition
         \\  help              Show this help
         \\
@@ -61,10 +62,10 @@ pub fn main(init: std.process.Init) !void {
         .cd => try @import("commands/cd.zig").run(io, allocator, &args),
         .ls => try @import("commands/ls.zig").run(io, allocator, &args),
         .add => try @import("commands/add.zig").run(io, allocator, &args),
-        .delete => @import("commands/delete.zig").run(&args),
-        .rename => @import("commands/rename.zig").run(&args),
-        .move => @import("commands/move.zig").run(&args),
-        .read => @import("commands/read.zig").run(&args),
+        .delete => try @import("commands/delete.zig").run(io, allocator, &args),
+        .rename => try @import("commands/rename.zig").run(io, allocator, &args),
+        .move => try @import("commands/move.zig").run(io, allocator, &args),
+        .read => try @import("commands/read.zig").run(io, allocator, &args),
         .@"query-edit" => @import("commands/query_edit.zig").run(&args),
         .help => printUsage(),
     }
