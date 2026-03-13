@@ -97,3 +97,20 @@ pub fn fileExists(io: std.Io, path: []const u8) bool {
     cwd.access(io, path, .{}) catch return false;
     return true;
 }
+
+pub const TargetType = enum { file, folder };
+
+pub fn getTargetType(io: std.Io, path: []const u8) ?TargetType {
+    const cwd = std.Io.Dir.cwd();
+    // Try opening as directory first
+    if (cwd.openDir(io, path, .{})) |dir| {
+        dir.close(io);
+        return .folder;
+    } else |_| {}
+    // Try opening as file
+    if (cwd.openFile(io, path, .{})) |file| {
+        file.close(io);
+        return .file;
+    } else |_| {}
+    return null;
+}

@@ -1,9 +1,54 @@
 const std = @import("std");
 const persistence = @import("../persistence.zig");
-const path = @import("../path.zig");
+const pathmod = @import("../path.zig");
+const query = @import("../query.zig");
+
+const Flags = struct {
+    show_hidden: bool = false,
+    long_format: bool = false,
+    recursive: bool = false,
+    max_depth: ?usize = null,
+};
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Iterator) !void {
-    _ = args; // TODO: handle flags (-a, -l, -r)
+    var flags = Flags{};
+
+    // Parse flags
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "-a")) {
+            flags.show_hidden = true;
+        } else if (std.mem.eql(u8, arg, "-l")) {
+            flags.long_format = true;
+        } else if (std.mem.eql(u8, arg, "-r")) {
+            flags.recursive = true;
+        } else if (std.mem.startsWith(u8, arg, "-r")) {
+            flags.recursive = true;
+            const depth_str = arg[2..];
+            flags.max_depth = std.fmt.parseInt(usize, depth_str, 10) catch {
+                std.debug.print("Invalid depth: {s}\n", .{depth_str});
+                std.process.exit(1);
+            };
+        } else if (std.mem.eql(u8, arg, "-al") or std.mem.eql(u8, arg, "-la")) {
+            flags.show_hidden = true;
+            flags.long_format = true;
+        } else if (std.mem.eql(u8, arg, "-ar") or std.mem.eql(u8, arg, "-ra")) {
+            flags.show_hidden = true;
+            flags.recursive = true;
+        } else if (std.mem.eql(u8, arg, "-lr") or std.mem.eql(u8, arg, "-rl")) {
+            flags.long_format = true;
+            flags.recursive = true;
+        } else if (std.mem.eql(u8, arg, "-alr") or std.mem.eql(u8, arg, "-arl") or
+            std.mem.eql(u8, arg, "-lar") or std.mem.eql(u8, arg, "-lra") or
+            std.mem.eql(u8, arg, "-ral") or std.mem.eql(u8, arg, "-rla"))
+        {
+            flags.show_hidden = true;
+            flags.long_format = true;
+            flags.recursive = true;
+        } else {
+            std.debug.print("Unknown flag: {s}\n", .{arg});
+            std.process.exit(1);
+        }
+    }
 
     var vdir_json = try persistence.loadVDir(io, allocator) orelse {
         std.debug.print("No vdir found. Run 'vdir init' first.\n", .{});
@@ -20,38 +65,120 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.process.exit(1);
     };
 
-    // Resolve marker to current folder
-    const current = path.resolveMarker(root, marker) catch |err| {
+    const current = pathmod.resolveMarker(root, marker) catch |err| {
         switch (err) {
-            path.ResolveError.NotFound => std.debug.print("Current path not found: {s}\n", .{marker}),
-            path.ResolveError.NotAFolder => std.debug.print("Not a folder: {s}\n", .{marker}),
-            path.ResolveError.InvalidPath => std.debug.print("Invalid path: {s}\n", .{marker}),
+            pathmod.ResolveError.NotFound => std.debug.print("Current path not found: {s}\n", .{marker}),
+            pathmod.ResolveError.NotAFolder => std.debug.print("Not a folder: {s}\n", .{marker}),
+            pathmod.ResolveError.InvalidPath => std.debug.print("Invalid path: {s}\n", .{marker}),
         }
         std.process.exit(1);
     };
 
-    const children = current.object.get("children") orelse {
-        // Not a folder (query or reference) - just show info
-        const item_type = current.object.get("type").?.string;
-        if (std.mem.eql(u8, item_type, "query")) {
-            const cmd = current.object.get("cmd").?.string;
-            std.debug.print("query: {s}\n", .{if (cmd.len > 0) cmd else "(empty)"});
+    try listItems(io, allocator, current, flags, 0);
+}
+
+fn listItems(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, flags: Flags, depth: usize) !void {
+    const children = item.object.get("children") orelse {
+        // Not a folder - show query results or reference info
+        const item_type = item.object.get("type").?.string;
+        if (std.mem.eql(u8, item_type, "query") and flags.recursive) {
+            try expandQuery(io, allocator, item, flags, depth);
         } else if (std.mem.eql(u8, item_type, "reference")) {
-            const target = current.object.get("target").?.string;
-            std.debug.print("reference -> {s}\n", .{target});
+            const target = item.object.get("target").?.string;
+            std.debug.print("-> {s}\n", .{target});
         }
         return;
     };
 
     for (children.array.items) |child| {
-        const item_type = child.object.get("type").?.string;
         const item_name = child.object.get("name").?.string;
-        const prefix: []const u8 = if (std.mem.eql(u8, item_type, "folder"))
-            "d"
-        else if (std.mem.eql(u8, item_type, "query"))
-            "q"
-        else
-            "r";
-        std.debug.print("{s} {s}\n", .{ prefix, item_name });
+
+        // Skip hidden unless -a
+        if (!flags.show_hidden and item_name.len > 0 and item_name[0] == '.') {
+            continue;
+        }
+
+        const item_type = child.object.get("type").?.string;
+        const indent = "  " ** 8; // max 8 levels
+
+        if (flags.long_format) {
+            printIndent(indent, depth);
+            if (std.mem.eql(u8, item_type, "folder")) {
+                const folder_children = child.object.get("children").?.array;
+                std.debug.print("d {s}/ ({d} items)\n", .{ item_name, folder_children.items.len });
+            } else if (std.mem.eql(u8, item_type, "query")) {
+                const suppliers = if (child.object.get("suppliers")) |s| s.object.count() else 0;
+                std.debug.print("q {s} ({d} suppliers)\n", .{ item_name, suppliers });
+            } else {
+                const target = child.object.get("target").?.string;
+                const target_type = if (child.object.get("target_type")) |tt| tt.string else "?";
+                const tt_char: u8 = if (std.mem.eql(u8, target_type, "folder")) 'd' else 'f';
+                std.debug.print("r {s} -> {s} [{c}]\n", .{ item_name, target, tt_char });
+            }
+        } else {
+            printIndent(indent, depth);
+            const prefix: []const u8 = if (std.mem.eql(u8, item_type, "folder"))
+                "d"
+            else if (std.mem.eql(u8, item_type, "query"))
+                "q"
+            else
+                "r";
+            std.debug.print("{s} {s}\n", .{ prefix, item_name });
+        }
+
+        // Recursive
+        if (flags.recursive) {
+            const max = flags.max_depth orelse 10;
+            if (depth < max) {
+                if (std.mem.eql(u8, item_type, "folder")) {
+                    const child_ptr = @constCast(&child);
+                    try listItems(io, allocator, child_ptr, flags, depth + 1);
+                } else if (std.mem.eql(u8, item_type, "query")) {
+                    const child_ptr = @constCast(&child);
+                    try expandQuery(io, allocator, child_ptr, flags, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+fn expandQuery(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, flags: Flags, depth: usize) !void {
+    const suppliers_val = item.object.get("suppliers") orelse return;
+    const expr = if (item.object.get("expr")) |e| e.string else "";
+
+    var result = query.execute(allocator, io, &suppliers_val.object, expr) catch |err| {
+        const indent = "  " ** 8;
+        printIndent(indent, depth);
+        switch (err) {
+            query.QueryError.InvalidExpression => std.debug.print("(invalid expression)\n", .{}),
+            query.QueryError.UnknownSupplier => std.debug.print("(unknown supplier)\n", .{}),
+            query.QueryError.CommandFailed => std.debug.print("(command failed)\n", .{}),
+            else => std.debug.print("(error)\n", .{}),
+        }
+        return;
+    };
+    defer result.deinit();
+
+    const indent = "  " ** 8;
+    var it = result.files.keyIterator();
+    while (it.next()) |key| {
+        printIndent(indent, depth);
+        if (flags.long_format) {
+            std.debug.print("f {s}\n", .{key.*});
+        } else {
+            std.debug.print("  {s}\n", .{key.*});
+        }
+    }
+
+    if (result.count() == 0) {
+        printIndent(indent, depth);
+        std.debug.print("(no results)\n", .{});
+    }
+}
+
+fn printIndent(indent: []const u8, depth: usize) void {
+    const len = @min(depth * 2, indent.len);
+    if (len > 0) {
+        std.debug.print("{s}", .{indent[0..len]});
     }
 }

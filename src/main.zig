@@ -4,12 +4,13 @@ const Command = enum {
     init,
     cd,
     ls,
-    add,
-    delete,
-    rename,
-    move,
-    read,
-    @"query-edit",
+    mkdir,
+    mkq,
+    ln,
+    rm,
+    mv,
+    info,
+    set,
     help,
 };
 
@@ -18,21 +19,21 @@ fn printUsage() void {
         \\Usage: vdir <command> [args]
         \\
         \\Commands:
-        \\  init              Initialize a new vdir in current directory
-        \\  cd <path>         Change marker to directory
-        \\  ls [flags]        List items at current marker
-        \\  add <name>        Add folder or query
-        \\  add <ref> [name]  Add reference to file/directory
-        \\  delete <name>     Delete item
-        \\  rename <old> <new> Rename item
-        \\  move <name> <dir> Move item to directory
-        \\  read <name>       Show item details
-        \\  query-edit <name> Edit query definition
-        \\  help              Show this help
+        \\  init             Initialize a new vdir in current directory
+        \\  cd <path>        Change marker to directory
+        \\  ls [-a] [-l] [-r[N]]  List items (-a=hidden, -l=long, -r=recursive)
+        \\  mkdir <name>     Create a folder
+        \\  mkq <name>       Create a query
+        \\  ln <path> [name] Create a reference to file/directory
+        \\  rm <name>        Remove item
+        \\  mv <name> <dest> Rename or move item
+        \\  info <name>      Show item details
+        \\  set <name> <prop> [args]   Set item property
+        \\  help             Show this help
         \\
         \\Paths:
-        \\  ~/      Root of vdir
-        \\  ../     Parent directory
+        \\  ~       Root of vdir
+        \\  ..      Parent directory
         \\  <name>  Relative to current marker
         \\
     , .{});
@@ -60,12 +61,13 @@ pub fn main(init: std.process.Init) !void {
         .init => try @import("commands/init.zig").run(io),
         .cd => try @import("commands/cd.zig").run(io, allocator, &args),
         .ls => try @import("commands/ls.zig").run(io, allocator, &args),
-        .add => try @import("commands/add.zig").run(io, allocator, &args),
-        .delete => @import("commands/delete.zig").run(&args),
-        .rename => @import("commands/rename.zig").run(&args),
-        .move => @import("commands/move.zig").run(&args),
-        .read => @import("commands/read.zig").run(&args),
-        .@"query-edit" => @import("commands/query_edit.zig").run(&args),
+        .mkdir => try @import("commands/mkdir.zig").run(io, allocator, &args),
+        .mkq => try @import("commands/mkq.zig").run(io, allocator, &args),
+        .ln => try @import("commands/ln.zig").run(io, allocator, &args),
+        .rm => try @import("commands/rm.zig").run(io, allocator, &args),
+        .mv => try @import("commands/mv.zig").run(io, allocator, &args),
+        .info => try @import("commands/info.zig").run(io, allocator, &args),
+        .set => try @import("commands/set.zig").run(io, allocator, &args),
         .help => printUsage(),
     }
 }

@@ -1,0 +1,18 @@
+{
+  "root": {
+    "name": "",
+    "children": [
+      {
+        "type": "folder",
+        "name": "General",
+        "children": []
+      },
+      {
+        "type": "query",
+        "name": "markdown",
+        "scope": ".",
+        "cmd": ""
+      }
+    ]
+  }
+}
