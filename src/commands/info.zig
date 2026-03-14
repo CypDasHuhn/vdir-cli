@@ -37,7 +37,6 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.process.exit(1);
     };
 
-    // Find item
     for (children.array.items) |child| {
         const child_name = child.object.get("name").?.string;
         if (std.mem.eql(u8, child_name, name)) {
@@ -50,7 +49,6 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
                 const folder_children = child.object.get("children").?.array;
                 std.debug.print("children: {d}\n", .{folder_children.items.len});
             } else if (std.mem.eql(u8, item_type, "query")) {
-                // New format with suppliers
                 if (child.object.get("suppliers")) |suppliers_val| {
                     const expr = if (child.object.get("expr")) |e| e.string else "";
                     std.debug.print("expr: {s}\n", .{if (expr.len > 0) expr else "(empty)"});
@@ -63,10 +61,15 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
                         const cmd = sup.object.get("cmd").?.string;
                         std.debug.print("  {s}:\n", .{sup_name});
                         std.debug.print("    scope: {s}\n", .{scope});
+                        if (sup.object.get("shell")) |shell_val| {
+                            const program = shell_val.object.get("program").?.string;
+                            const execute_arg = shell_val.object.get("execute_arg").?.string;
+                            std.debug.print("    shell.program: {s}\n", .{program});
+                            std.debug.print("    shell.execute_arg: {s}\n", .{execute_arg});
+                        }
                         std.debug.print("    cmd: {s}\n", .{if (cmd.len > 0) cmd else "(empty)"});
                     }
                 } else {
-                    // Old format fallback
                     const scope = child.object.get("scope").?.string;
                     const cmd = child.object.get("cmd").?.string;
                     std.debug.print("scope: {s}\n", .{scope});

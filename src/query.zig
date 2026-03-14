@@ -1,9 +1,11 @@
 const std = @import("std");
+const shellmod = @import("shell.zig");
 
 pub const QueryError = error{
     InvalidExpression,
     UnknownSupplier,
     CommandFailed,
+    InvalidConfig,
     OutOfMemory,
 };
 
@@ -41,9 +43,7 @@ pub const FileSet = struct {
         return self.files.count();
     }
 
-    // Set operations
     pub fn intersect(self: *FileSet, other: *const FileSet) !void {
-        // Collect keys to remove (max 4096)
         var to_remove: [4096][]const u8 = undefined;
         var remove_count: usize = 0;
 
@@ -71,7 +71,6 @@ pub const FileSet = struct {
     }
 
     pub fn subtract(self: *FileSet, other: *const FileSet) !void {
-        // Collect keys to remove (max 4096)
         var to_remove: [4096][]const u8 = undefined;
         var remove_count: usize = 0;
 
@@ -111,13 +110,11 @@ const Token = union(enum) {
 };
 
 fn tokenize(allocator: std.mem.Allocator, expr: []const u8) ![]Token {
-    // Use fixed buffer, max 64 tokens
     var tokens: [64]Token = undefined;
     var count: usize = 0;
 
     var i: usize = 0;
     while (i < expr.len) {
-        // Skip whitespace
         while (i < expr.len and (expr[i] == ' ' or expr[i] == '\t')) {
             i += 1;
         }
@@ -176,6 +173,7 @@ const Parser = struct {
     suppliers: *const std.json.ObjectMap,
     allocator: std.mem.Allocator,
     io: std.Io,
+    shell: shellmod.ShellConfig,
 
     fn parse(self: *Parser) ParseError!FileSet {
         return self.parseOr();
@@ -212,7 +210,6 @@ const Parser = struct {
     fn parseNot(self: *Parser) ParseError!FileSet {
         if (self.pos < self.tokens.len and self.tokens[self.pos] == .not) {
             self.pos += 1;
-            // NOT requires a base set to subtract from - get all files from all suppliers
             var all = try self.getAllFiles();
             errdefer all.deinit();
             var operand = try self.parsePrimary();
@@ -260,7 +257,8 @@ const Parser = struct {
             return FileSet.init(self.allocator);
         }
 
-        return executeCommand(self.allocator, self.io, scope, cmd);
+        const supplier_shell = try shellmod.resolveForSupplier(&supplier, self.shell);
+        return executeCommand(self.allocator, self.io, supplier_shell, scope, cmd);
     }
 
     fn getAllFiles(self: *Parser) !FileSet {
@@ -275,7 +273,8 @@ const Parser = struct {
 
             if (cmd.len == 0) continue;
 
-            var supplier_files = try executeCommand(self.allocator, self.io, scope, cmd);
+            const supplier_shell = try shellmod.resolveForSupplier(&supplier, self.shell);
+            var supplier_files = try executeCommand(self.allocator, self.io, supplier_shell, scope, cmd);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }
@@ -284,38 +283,33 @@ const Parser = struct {
     }
 };
 
-fn executeCommand(allocator: std.mem.Allocator, io: std.Io, scope: []const u8, cmd: []const u8) !FileSet {
+fn executeCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    shell: shellmod.ShellConfig,
+    scope: []const u8,
+    cmd: []const u8,
+) !FileSet {
     var result = FileSet.init(allocator);
     errdefer result.deinit();
 
-    // Use std.process.spawn to run the command
-    var child = std.process.spawn(io, .{
-        .argv = &[_][]const u8{ "/bin/sh", "-c", cmd },
-        .cwd = if (scope.len > 0 and !std.mem.eql(u8, scope, "."))
-            .{ .path = scope }
-        else
-            .inherit,
-        .stdout = .pipe,
-        .stderr = .ignore,
+    const cwd: std.process.Child.Cwd = if (scope.len > 0 and !std.mem.eql(u8, scope, "."))
+        .{ .path = scope }
+    else
+        .inherit;
+
+    const run_result = std.process.run(allocator, io, .{
+        .argv = &[_][]const u8{ shell.program, shell.execute_arg, cmd },
+        .cwd = cwd,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(64 * 1024),
     }) catch {
-        return result; // Return empty set on spawn failure
-    };
-
-    // Read all output
-    const stdout = child.stdout orelse return result;
-    var read_buf: [8192]u8 = undefined;
-    var reader = stdout.reader(io, &read_buf);
-
-    const output = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch {
-        _ = child.wait(io) catch {};
         return result;
     };
-    defer allocator.free(output);
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
 
-    _ = child.wait(io) catch {};
-
-    // Split by lines
-    var lines = std.mem.splitScalar(u8, output, '\n');
+    var lines = std.mem.splitScalar(u8, run_result.stdout, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len > 0) {
@@ -331,8 +325,8 @@ pub fn execute(
     io: std.Io,
     suppliers: *const std.json.ObjectMap,
     expr: []const u8,
+    shell: shellmod.ShellConfig,
 ) !FileSet {
-    // If no expression, just union all suppliers
     if (expr.len == 0) {
         var result = FileSet.init(allocator);
         errdefer result.deinit();
@@ -345,7 +339,8 @@ pub fn execute(
 
             if (cmd.len == 0) continue;
 
-            var supplier_files = try executeCommand(allocator, io, scope, cmd);
+            const supplier_shell = try shellmod.resolveForSupplier(&supplier, shell);
+            var supplier_files = try executeCommand(allocator, io, supplier_shell, scope, cmd);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }
@@ -362,6 +357,7 @@ pub fn execute(
         .suppliers = suppliers,
         .allocator = allocator,
         .io = io,
+        .shell = shell,
     };
 
     return parser.parse();

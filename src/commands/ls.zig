@@ -2,6 +2,7 @@ const std = @import("std");
 const persistence = @import("../persistence.zig");
 const pathmod = @import("../path.zig");
 const query = @import("../query.zig");
+const shellmod = @import("../shell.zig");
 
 const Flags = struct {
     show_hidden: bool = false,
@@ -10,7 +11,12 @@ const Flags = struct {
     max_depth: ?usize = null,
 };
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Iterator) !void {
+pub fn run(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: std.process.Environ,
+    args: *std.process.Args.Iterator,
+) !void {
     var flags = Flags{};
 
     // Parse flags
@@ -64,6 +70,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.debug.print("Invalid vdir format\n", .{});
         std.process.exit(1);
     };
+    const shell = shellmod.resolveDefault(io, environ, allocator) catch |err| {
+        std.debug.print("Failed to resolve shell: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer shell.deinit(allocator);
 
     const current = pathmod.resolveMarker(root, marker) catch |err| {
         switch (err) {
@@ -74,15 +85,22 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.process.exit(1);
     };
 
-    try listItems(io, allocator, current, flags, 0);
+    try listItems(io, allocator, current, flags, shell, 0);
 }
 
-fn listItems(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, flags: Flags, depth: usize) !void {
+fn listItems(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    item: *std.json.Value,
+    flags: Flags,
+    shell: shellmod.ShellConfig,
+    depth: usize,
+) !void {
     const children = item.object.get("children") orelse {
         // Not a folder - show query results or reference info
         const item_type = item.object.get("type").?.string;
         if (std.mem.eql(u8, item_type, "query") and flags.recursive) {
-            try expandQuery(io, allocator, item, flags, depth);
+            try expandQuery(io, allocator, item, flags, shell, depth);
         } else if (std.mem.eql(u8, item_type, "reference")) {
             const target = item.object.get("target").?.string;
             std.debug.print("-> {s}\n", .{target});
@@ -107,7 +125,12 @@ fn listItems(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, fl
                 const folder_children = child.object.get("children").?.array;
                 std.debug.print("d {s}/ ({d} items)\n", .{ item_name, folder_children.items.len });
             } else if (std.mem.eql(u8, item_type, "query")) {
-                const suppliers = if (child.object.get("suppliers")) |s| s.object.count() else 0;
+                const suppliers: usize = if (child.object.get("suppliers")) |s|
+                    s.object.count()
+                else if (child.object.get("cmd") != null)
+                    1
+                else
+                    0;
                 std.debug.print("q {s} ({d} suppliers)\n", .{ item_name, suppliers });
             } else {
                 const target = child.object.get("target").?.string;
@@ -132,21 +155,41 @@ fn listItems(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, fl
             if (depth < max) {
                 if (std.mem.eql(u8, item_type, "folder")) {
                     const child_ptr = @constCast(&child);
-                    try listItems(io, allocator, child_ptr, flags, depth + 1);
+                    try listItems(io, allocator, child_ptr, flags, shell, depth + 1);
                 } else if (std.mem.eql(u8, item_type, "query")) {
                     const child_ptr = @constCast(&child);
-                    try expandQuery(io, allocator, child_ptr, flags, depth + 1);
+                    try expandQuery(io, allocator, child_ptr, flags, shell, depth + 1);
                 }
             }
         }
     }
 }
 
-fn expandQuery(io: std.Io, allocator: std.mem.Allocator, item: *std.json.Value, flags: Flags, depth: usize) !void {
-    const suppliers_val = item.object.get("suppliers") orelse return;
+fn expandQuery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    item: *std.json.Value,
+    flags: Flags,
+    shell: shellmod.ShellConfig,
+    depth: usize,
+) !void {
+    var temp_suppliers: ?std.json.Value = null;
+    const suppliers_val = if (item.object.get("suppliers")) |suppliers|
+        suppliers
+    else if (item.object.get("cmd")) |cmd_val| blk: {
+        const scope = if (item.object.get("scope")) |scope_val| scope_val.string else ".";
+        var supplier = std.json.ObjectMap.init(allocator);
+        try supplier.put("scope", .{ .string = scope });
+        try supplier.put("cmd", .{ .string = cmd_val.string });
+
+        var suppliers = std.json.ObjectMap.init(allocator);
+        try suppliers.put("_default", .{ .object = supplier });
+        temp_suppliers = .{ .object = suppliers };
+        break :blk temp_suppliers.?;
+    } else return;
     const expr = if (item.object.get("expr")) |e| e.string else "";
 
-    var result = query.execute(allocator, io, &suppliers_val.object, expr) catch |err| {
+    var result = query.execute(allocator, io, &suppliers_val.object, expr, shell) catch |err| {
         const indent = "  " ** 8;
         printIndent(indent, depth);
         switch (err) {

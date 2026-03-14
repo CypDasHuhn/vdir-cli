@@ -1,14 +1,19 @@
 const std = @import("std");
 const persistence = @import("../persistence.zig");
 const pathmod = @import("../path.zig");
+const shellmod = @import("../shell.zig");
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Iterator) !void {
+pub fn run(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: std.process.Environ,
+    args: *std.process.Args.Iterator,
+) !void {
     const name = args.next() orelse {
         std.debug.print("Usage: vdir mkq <name> [cmd]\n", .{});
         std.process.exit(1);
     };
 
-    // Optional inline command for simple queries
     const inline_cmd = args.next();
 
     var vdir_json = try persistence.loadVDir(io, allocator) orelse {
@@ -16,6 +21,12 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.process.exit(1);
     };
     defer vdir_json.deinit();
+
+    const shell = shellmod.resolveDefault(io, environ, allocator) catch |err| {
+        std.debug.print("Failed to resolve shell: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer shell.deinit(allocator);
 
     const marker_result = try persistence.loadMarker(io, allocator);
     const marker = marker_result orelse "~";
@@ -56,11 +67,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
 
     var suppliers = std.json.ObjectMap.init(json_allocator);
 
-    // If inline command provided, create _default supplier
     if (inline_cmd) |cmd| {
         var default_supplier = std.json.ObjectMap.init(json_allocator);
         try default_supplier.put("scope", .{ .string = "." });
         try default_supplier.put("cmd", .{ .string = cmd });
+        try putSupplierShell(&default_supplier, shell, json_allocator);
         try suppliers.put("_default", .{ .object = default_supplier });
         try new_item.put("expr", .{ .string = "_default" });
     } else {
@@ -77,4 +88,15 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
     } else {
         std.debug.print("q {s}\n", .{name});
     }
+}
+
+fn putSupplierShell(
+    supplier: *std.json.ObjectMap,
+    shell: shellmod.ShellConfig,
+    allocator: std.mem.Allocator,
+) !void {
+    var shell_obj = std.json.ObjectMap.init(allocator);
+    try shell_obj.put("program", .{ .string = try allocator.dupe(u8, shell.program) });
+    try shell_obj.put("execute_arg", .{ .string = try allocator.dupe(u8, shell.execute_arg) });
+    try supplier.put("shell", .{ .object = shell_obj });
 }
