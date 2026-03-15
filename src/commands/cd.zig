@@ -39,16 +39,18 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
     const target = pathmod.resolveMarker(root, resolved) catch |err| {
         switch (err) {
             pathmod.ResolveError.NotFound => std.debug.print("Path not found: {s}\n", .{path}),
-            pathmod.ResolveError.NotAFolder => std.debug.print("Not a folder: {s}\n", .{path}),
+            pathmod.ResolveError.NotAFolder => std.debug.print("Not a folder or query: {s}\n", .{path}),
             pathmod.ResolveError.InvalidPath => std.debug.print("Invalid path: {s}\n", .{path}),
         }
         std.process.exit(1);
     };
 
-    // Check it's a folder (root has no type field, it's implicitly a folder)
+    // Root is implicit folder. Queries are also navigable containers.
     if (target.object.get("type")) |type_val| {
-        if (!std.mem.eql(u8, type_val.string, "folder")) {
-            std.debug.print("Not a folder: {s}\n", .{path});
+        if (!std.mem.eql(u8, type_val.string, "folder") and
+            !std.mem.eql(u8, type_val.string, "query"))
+        {
+            std.debug.print("Not a folder or query: {s}\n", .{path});
             std.process.exit(1);
         }
     }

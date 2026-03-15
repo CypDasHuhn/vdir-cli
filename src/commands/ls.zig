@@ -9,6 +9,13 @@ const Flags = struct {
     long_format: bool = false,
     recursive: bool = false,
     max_depth: ?usize = null,
+    path_mode: PathMode = .basename,
+};
+
+const PathMode = enum {
+    basename,
+    relative,
+    full,
 };
 
 pub fn run(
@@ -18,10 +25,16 @@ pub fn run(
     args: *std.process.Args.Iterator,
 ) !void {
     var flags = Flags{};
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
 
     // Parse flags
     while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "-a")) {
+        if (std.mem.eql(u8, arg, "--rel")) {
+            flags.path_mode = .relative;
+        } else if (std.mem.eql(u8, arg, "--full")) {
+            flags.path_mode = .full;
+        } else if (std.mem.eql(u8, arg, "-a")) {
             flags.show_hidden = true;
         } else if (std.mem.eql(u8, arg, "-l")) {
             flags.long_format = true;
@@ -85,7 +98,7 @@ pub fn run(
         std.process.exit(1);
     };
 
-    try listItems(io, allocator, current, flags, shell, 0);
+    try listItems(io, allocator, current, flags, shell, cwd, 0);
 }
 
 fn listItems(
@@ -94,13 +107,14 @@ fn listItems(
     item: *std.json.Value,
     flags: Flags,
     shell: shellmod.ShellConfig,
+    cwd: []const u8,
     depth: usize,
 ) !void {
     const children = item.object.get("children") orelse {
-        // Not a folder - show query results or reference info
+        // Query markers behave like dynamic folders.
         const item_type = item.object.get("type").?.string;
-        if (std.mem.eql(u8, item_type, "query") and flags.recursive) {
-            try expandQuery(io, allocator, item, flags, shell, depth);
+        if (std.mem.eql(u8, item_type, "query")) {
+            try expandQuery(io, allocator, item, flags, shell, cwd, depth);
         } else if (std.mem.eql(u8, item_type, "reference")) {
             const target = item.object.get("target").?.string;
             std.debug.print("-> {s}\n", .{target});
@@ -155,10 +169,10 @@ fn listItems(
             if (depth < max) {
                 if (std.mem.eql(u8, item_type, "folder")) {
                     const child_ptr = @constCast(&child);
-                    try listItems(io, allocator, child_ptr, flags, shell, depth + 1);
+                    try listItems(io, allocator, child_ptr, flags, shell, cwd, depth + 1);
                 } else if (std.mem.eql(u8, item_type, "query")) {
                     const child_ptr = @constCast(&child);
-                    try expandQuery(io, allocator, child_ptr, flags, shell, depth + 1);
+                    try expandQuery(io, allocator, child_ptr, flags, shell, cwd, depth + 1);
                 }
             }
         }
@@ -171,6 +185,7 @@ fn expandQuery(
     item: *std.json.Value,
     flags: Flags,
     shell: shellmod.ShellConfig,
+    cwd: []const u8,
     depth: usize,
 ) !void {
     var temp_suppliers: ?std.json.Value = null;
@@ -205,11 +220,14 @@ fn expandQuery(
     const indent = "  " ** 8;
     var it = result.files.keyIterator();
     while (it.next()) |key| {
+        const display_path = try formatDisplayPath(allocator, cwd, key.*, flags.path_mode);
+        defer allocator.free(display_path);
+
         printIndent(indent, depth);
         if (flags.long_format) {
-            std.debug.print("f {s}\n", .{key.*});
+            std.debug.print("f {s}\n", .{display_path});
         } else {
-            std.debug.print("  {s}\n", .{key.*});
+            std.debug.print("{s}\n", .{display_path});
         }
     }
 
@@ -224,4 +242,42 @@ fn printIndent(indent: []const u8, depth: usize) void {
     if (len > 0) {
         std.debug.print("{s}", .{indent[0..len]});
     }
+}
+
+fn formatDisplayPath(
+    allocator: std.mem.Allocator,
+    cwd: []const u8,
+    path: []const u8,
+    mode: PathMode,
+) ![]u8 {
+    return switch (mode) {
+        .full => normalizeSeparators(allocator, path),
+        .basename => allocator.dupe(u8, std.fs.path.basename(path)),
+        .relative => blk: {
+            if (!std.fs.path.isAbsolute(path)) {
+                break :blk normalizeSeparators(allocator, path);
+            }
+
+            const relative = std.fs.path.relative(allocator, cwd, null, cwd, path) catch
+                return normalizeSeparators(allocator, path);
+            errdefer allocator.free(relative);
+
+            if (std.fs.path.isAbsolute(relative)) {
+                allocator.free(relative);
+                break :blk normalizeSeparators(allocator, path);
+            }
+
+            const normalized = try normalizeSeparators(allocator, relative);
+            allocator.free(relative);
+            break :blk normalized;
+        },
+    };
+}
+
+fn normalizeSeparators(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const result = try allocator.dupe(u8, path);
+    for (result) |*ch| {
+        if (ch.* == '\\') ch.* = '/';
+    }
+    return result;
 }

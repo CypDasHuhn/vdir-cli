@@ -23,8 +23,8 @@ fn printUsage() void {
         \\Commands:
         \\  init             Initialize a new vdir in current directory
         \\  pwd              Print current marker
-        \\  cd <path>        Change marker to directory
-        \\  ls [-a] [-l] [-r[N]]  List items (-a=hidden, -l=long, -r=recursive)
+        \\  cd <path>        Change marker to folder or query
+        \\  ls [-a] [-l] [-r[N]] [--rel|--full]  List items
         \\  mkdir <name>     Create a folder
         \\  mkq <name> [cmd]  Create a query
         \\  shell [...]      Show or configure the command shell
