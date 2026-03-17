@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const shared_shell = b.createModule(.{
+        .root_source_file = b.path("src/shell.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "vdir_cli",
@@ -16,6 +21,18 @@ pub fn build(b: *std.Build) void {
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
     b.installArtifact(exe);
+
+    const vc_exe = b.addExecutable(.{
+        .name = "vc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/vc/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    vc_exe.root_module.addImport("shared_shell", shared_shell);
+    b.installArtifact(vc_exe);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

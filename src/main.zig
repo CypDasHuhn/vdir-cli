@@ -7,6 +7,7 @@ const Command = enum {
     ls,
     mkdir,
     mkq,
+    compiler,
     shell,
     ln,
     rm,
@@ -27,6 +28,7 @@ fn printUsage() void {
         \\  ls [-a] [-l] [-r[N]] [--rel|--full]  List items
         \\  mkdir <name>     Create a folder
         \\  mkq <name> [cmd]  Create a query
+        \\  compiler [...]   Show or configure the external command compiler
         \\  shell [...]      Show or configure the command shell
         \\  ln <path> [name] Create a reference to file/directory
         \\  rm <name>        Remove item
@@ -69,6 +71,7 @@ pub fn main(init: std.process.Init) !void {
         .ls => try @import("commands/ls.zig").run(io, allocator, init.minimal.environ, &args),
         .mkdir => try @import("commands/mkdir.zig").run(io, allocator, &args),
         .mkq => try @import("commands/mkq.zig").run(io, allocator, init.minimal.environ, &args),
+        .compiler => try @import("commands/compiler.zig").run(io, allocator, init.minimal.environ, &args),
         .shell => try @import("commands/shell.zig").run(io, allocator, init.minimal.environ, &args),
         .ln => try @import("commands/ln.zig").run(io, allocator, &args),
         .rm => try @import("commands/rm.zig").run(io, allocator, &args),

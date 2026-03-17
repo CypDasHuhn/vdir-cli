@@ -1,5 +1,6 @@
 const std = @import("std");
 const shellmod = @import("shell.zig");
+const compilermod = @import("compiler_config.zig");
 
 pub const QueryError = error{
     InvalidExpression,
@@ -174,6 +175,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     shell: shellmod.ShellConfig,
+    compiler: ?compilermod.CompilerConfig,
 
     fn parse(self: *Parser) ParseError!FileSet {
         return self.parseOr();
@@ -258,7 +260,7 @@ const Parser = struct {
         }
 
         const supplier_shell = try shellmod.resolveForSupplier(&supplier, self.shell);
-        return executeCommand(self.allocator, self.io, supplier_shell, scope, cmd);
+        return executeCommand(self.allocator, self.io, self.compiler, supplier_shell, scope, cmd);
     }
 
     fn getAllFiles(self: *Parser) !FileSet {
@@ -274,7 +276,7 @@ const Parser = struct {
             if (cmd.len == 0) continue;
 
             const supplier_shell = try shellmod.resolveForSupplier(&supplier, self.shell);
-            var supplier_files = try executeCommand(self.allocator, self.io, supplier_shell, scope, cmd);
+            var supplier_files = try executeCommand(self.allocator, self.io, self.compiler, supplier_shell, scope, cmd);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }
@@ -286,6 +288,7 @@ const Parser = struct {
 fn executeCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
+    compiler: ?compilermod.CompilerConfig,
     shell: shellmod.ShellConfig,
     scope: []const u8,
     cmd: []const u8,
@@ -298,8 +301,15 @@ fn executeCommand(
     else
         .inherit;
 
+    const compiled_cmd = if (compiler) |active_compiler|
+        compilermod.compileCommand(allocator, io, active_compiler, shell.program, cmd) catch
+            return QueryError.CommandFailed
+    else
+        null;
+    defer if (compiled_cmd) |owned| allocator.free(owned);
+
     const run_result = std.process.run(allocator, io, .{
-        .argv = &[_][]const u8{ shell.program, shell.execute_arg, cmd },
+        .argv = &[_][]const u8{ shell.program, shell.execute_arg, compiled_cmd orelse cmd },
         .cwd = cwd,
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(64 * 1024),
@@ -326,6 +336,7 @@ pub fn execute(
     suppliers: *const std.json.ObjectMap,
     expr: []const u8,
     shell: shellmod.ShellConfig,
+    compiler: ?compilermod.CompilerConfig,
 ) !FileSet {
     if (expr.len == 0) {
         var result = FileSet.init(allocator);
@@ -340,7 +351,7 @@ pub fn execute(
             if (cmd.len == 0) continue;
 
             const supplier_shell = try shellmod.resolveForSupplier(&supplier, shell);
-            var supplier_files = try executeCommand(allocator, io, supplier_shell, scope, cmd);
+            var supplier_files = try executeCommand(allocator, io, compiler, supplier_shell, scope, cmd);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }
@@ -358,6 +369,7 @@ pub fn execute(
         .allocator = allocator,
         .io = io,
         .shell = shell,
+        .compiler = compiler,
     };
 
     return parser.parse();

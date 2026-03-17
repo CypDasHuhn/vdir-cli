@@ -3,6 +3,7 @@ const persistence = @import("../persistence.zig");
 const pathmod = @import("../path.zig");
 const query = @import("../query.zig");
 const shellmod = @import("../shell.zig");
+const compilermod = @import("../compiler_config.zig");
 
 const Flags = struct {
     show_hidden: bool = false,
@@ -88,6 +89,11 @@ pub fn run(
         std.process.exit(1);
     };
     defer shell.deinit(allocator);
+    const compiler = compilermod.resolveConfigured(io, environ, allocator) catch |err| {
+        std.debug.print("Failed to resolve compiler: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer if (compiler) |active| active.deinit(allocator);
 
     const current = pathmod.resolveMarker(root, marker) catch |err| {
         switch (err) {
@@ -98,7 +104,7 @@ pub fn run(
         std.process.exit(1);
     };
 
-    try listItems(io, allocator, current, flags, shell, cwd, 0);
+    try listItems(io, allocator, current, flags, shell, compiler, cwd, 0);
 }
 
 fn listItems(
@@ -107,6 +113,7 @@ fn listItems(
     item: *std.json.Value,
     flags: Flags,
     shell: shellmod.ShellConfig,
+    compiler: ?compilermod.CompilerConfig,
     cwd: []const u8,
     depth: usize,
 ) !void {
@@ -114,7 +121,7 @@ fn listItems(
         // Query markers behave like dynamic folders.
         const item_type = item.object.get("type").?.string;
         if (std.mem.eql(u8, item_type, "query")) {
-            try expandQuery(io, allocator, item, flags, shell, cwd, depth);
+            try expandQuery(io, allocator, item, flags, shell, compiler, cwd, depth);
         } else if (std.mem.eql(u8, item_type, "reference")) {
             const target = item.object.get("target").?.string;
             std.debug.print("-> {s}\n", .{target});
@@ -169,10 +176,10 @@ fn listItems(
             if (depth < max) {
                 if (std.mem.eql(u8, item_type, "folder")) {
                     const child_ptr = @constCast(&child);
-                    try listItems(io, allocator, child_ptr, flags, shell, cwd, depth + 1);
+                    try listItems(io, allocator, child_ptr, flags, shell, compiler, cwd, depth + 1);
                 } else if (std.mem.eql(u8, item_type, "query")) {
                     const child_ptr = @constCast(&child);
-                    try expandQuery(io, allocator, child_ptr, flags, shell, cwd, depth + 1);
+                    try expandQuery(io, allocator, child_ptr, flags, shell, compiler, cwd, depth + 1);
                 }
             }
         }
@@ -185,6 +192,7 @@ fn expandQuery(
     item: *std.json.Value,
     flags: Flags,
     shell: shellmod.ShellConfig,
+    compiler: ?compilermod.CompilerConfig,
     cwd: []const u8,
     depth: usize,
 ) !void {
@@ -204,7 +212,7 @@ fn expandQuery(
     } else return;
     const expr = if (item.object.get("expr")) |e| e.string else "";
 
-    var result = query.execute(allocator, io, &suppliers_val.object, expr, shell) catch |err| {
+    var result = query.execute(allocator, io, &suppliers_val.object, expr, shell, compiler) catch |err| {
         const indent = "  " ** 8;
         printIndent(indent, depth);
         switch (err) {
