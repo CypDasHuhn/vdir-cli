@@ -1,9 +1,11 @@
 const std = @import("std");
+const shell = @import("shell.zig");
 
 pub const QueryError = error{
     InvalidExpression,
     UnknownSupplier,
     CommandFailed,
+    NoShellAvailable,
     OutOfMemory,
 };
 
@@ -254,13 +256,16 @@ const Parser = struct {
         };
 
         const scope = supplier.object.get("scope").?.string;
-        const cmd = supplier.object.get("cmd").?.string;
+        const cmd_val = supplier.object.get("cmd") orelse {
+            return FileSet.init(self.allocator);
+        };
 
-        if (cmd.len == 0) {
+        // cmd is now an object map of shell -> command
+        if (cmd_val != .object) {
             return FileSet.init(self.allocator);
         }
 
-        return executeCommand(self.allocator, self.io, scope, cmd);
+        return executeCommand(self.allocator, self.io, scope, &cmd_val.object);
     }
 
     fn getAllFiles(self: *Parser) !FileSet {
@@ -271,11 +276,11 @@ const Parser = struct {
         while (it.next()) |entry| {
             const supplier = entry.value_ptr.*;
             const scope = supplier.object.get("scope").?.string;
-            const cmd = supplier.object.get("cmd").?.string;
+            const cmd_val = supplier.object.get("cmd") orelse continue;
 
-            if (cmd.len == 0) continue;
+            if (cmd_val != .object) continue;
 
-            var supplier_files = try executeCommand(self.allocator, self.io, scope, cmd);
+            var supplier_files = try executeCommand(self.allocator, self.io, scope, &cmd_val.object);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }
@@ -284,13 +289,24 @@ const Parser = struct {
     }
 };
 
-fn executeCommand(allocator: std.mem.Allocator, io: std.Io, scope: []const u8, cmd: []const u8) !FileSet {
+fn executeCommand(allocator: std.mem.Allocator, io: std.Io, scope: []const u8, cmd_map: *const std.json.ObjectMap) !FileSet {
     var result = FileSet.init(allocator);
     errdefer result.deinit();
 
+    // Find an available shell from the command map
+    const selected_shell = shell.findAvailableShell(io, cmd_map) orelse {
+        return result; // Return empty set if no shell available
+    };
+
+    // Get the command for this shell
+    const cmd = cmd_map.get(selected_shell.toString()).?.string;
+
+    // Build argv for the shell
+    const argv = selected_shell.buildArgv(cmd);
+
     // Use std.process.spawn to run the command
     var child = std.process.spawn(io, .{
-        .argv = &[_][]const u8{ "/bin/sh", "-c", cmd },
+        .argv = &argv,
         .cwd = if (scope.len > 0 and !std.mem.eql(u8, scope, "."))
             .{ .path = scope }
         else
@@ -341,11 +357,11 @@ pub fn execute(
         while (it.next()) |entry| {
             const supplier = entry.value_ptr.*;
             const scope = supplier.object.get("scope").?.string;
-            const cmd = supplier.object.get("cmd").?.string;
+            const cmd_val = supplier.object.get("cmd") orelse continue;
 
-            if (cmd.len == 0) continue;
+            if (cmd_val != .object) continue;
 
-            var supplier_files = try executeCommand(allocator, io, scope, cmd);
+            var supplier_files = try executeCommand(allocator, io, scope, &cmd_val.object);
             defer supplier_files.deinit();
             try result.unite(&supplier_files);
         }

@@ -25,7 +25,7 @@ pub fn resolve(
     else
         try resolveMarker(root, marker);
 
-    var remaining_path = if (std.mem.startsWith(u8, path, "~/"))
+    const remaining_path = if (std.mem.startsWith(u8, path, "~/"))
         path[2..]
     else if (std.mem.eql(u8, path, "~"))
         ""

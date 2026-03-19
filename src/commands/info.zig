@@ -60,10 +60,32 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
                         const sup_name = entry.key_ptr.*;
                         const sup = entry.value_ptr.*;
                         const scope = sup.object.get("scope").?.string;
-                        const cmd = sup.object.get("cmd").?.string;
                         std.debug.print("  {s}:\n", .{sup_name});
                         std.debug.print("    scope: {s}\n", .{scope});
-                        std.debug.print("    cmd: {s}\n", .{if (cmd.len > 0) cmd else "(empty)"});
+
+                        // Check for compiler info
+                        if (sup.object.get("compiler")) |comp| {
+                            std.debug.print("    compiler: {s}\n", .{comp.string});
+                            if (sup.object.get("args")) |comp_args| {
+                                std.debug.print("    args: {s}\n", .{comp_args.string});
+                            }
+                        }
+                        if (sup.object.get("raw")) |raw| {
+                            if (raw.bool) {
+                                std.debug.print("    raw: true\n", .{});
+                            }
+                        }
+
+                        // cmd is now an object with shell -> command mappings
+                        if (sup.object.get("cmd")) |cmd_val| {
+                            std.debug.print("    cmd:\n", .{});
+                            var cmd_it = cmd_val.object.iterator();
+                            while (cmd_it.next()) |cmd_entry| {
+                                const shell_name = cmd_entry.key_ptr.*;
+                                const shell_cmd = cmd_entry.value_ptr.*.string;
+                                std.debug.print("      {s}: {s}\n", .{ shell_name, shell_cmd });
+                            }
+                        }
                     }
                 } else {
                     // Old format fallback

@@ -1,6 +1,7 @@
 const std = @import("std");
 const persistence = @import("../persistence.zig");
 const pathmod = @import("../path.zig");
+const shell = @import("../shell.zig");
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Iterator) !void {
     const name = args.next() orelse {
@@ -85,28 +86,85 @@ fn handleQuerySet(
         const new_value = try json_allocator.dupe(u8, value);
         try child.object.put("expr", .{ .string = new_value });
         std.debug.print("expr = {s}\n", .{value});
-    } else if (std.mem.eql(u8, property, "cmd") or std.mem.eql(u8, property, "scope")) {
-        // Direct cmd/scope sets _default supplier
+    } else if (std.mem.startsWith(u8, property, "cmd:")) {
+        // cmd:shell syntax - set shell-specific command
+        const shell_name = property[4..];
+        const target_shell = shell.Shell.fromString(shell_name) orelse {
+            std.debug.print("Unknown shell: {s}\n", .{shell_name});
+            std.debug.print("Supported shells: bash, zsh, nu, powershell, cmd\n", .{});
+            std.process.exit(1);
+        };
+
         const value = args.next() orelse {
-            std.debug.print("Usage: set <query> {s} <value>\n", .{property});
+            std.debug.print("Usage: set <query> cmd:{s} <command>\n", .{shell_name});
+            std.process.exit(1);
+        };
+
+        // Get or create _default supplier
+        var supplier: *std.json.Value = undefined;
+        if (suppliers.object.getPtr("_default")) |sup| {
+            supplier = sup;
+        } else {
+            var new_supplier = std.json.ObjectMap.init(json_allocator);
+            try new_supplier.put("scope", .{ .string = "." });
+            const cmd_map = std.json.ObjectMap.init(json_allocator);
+            try new_supplier.put("cmd", .{ .object = cmd_map });
+            try suppliers.object.put("_default", .{ .object = new_supplier });
+            supplier = suppliers.object.getPtr("_default").?;
+
+            // Also set expr to _default if empty
+            const expr = child.object.get("expr").?.string;
+            if (expr.len == 0) {
+                try child.object.put("expr", .{ .string = "_default" });
+            }
+        }
+
+        // Get or create cmd map
+        var cmd_map: *std.json.Value = undefined;
+        if (supplier.object.getPtr("cmd")) |cm| {
+            if (cm.* == .object) {
+                cmd_map = cm;
+            } else {
+                // Migrate from string to object
+                const new_cmd_map = std.json.ObjectMap.init(json_allocator);
+                try supplier.object.put("cmd", .{ .object = new_cmd_map });
+                cmd_map = supplier.object.getPtr("cmd").?;
+            }
+        } else {
+            const new_cmd_map = std.json.ObjectMap.init(json_allocator);
+            try supplier.object.put("cmd", .{ .object = new_cmd_map });
+            cmd_map = supplier.object.getPtr("cmd").?;
+        }
+
+        // Set the shell-specific command
+        const shell_key = try json_allocator.dupe(u8, target_shell.toString());
+        const cmd_value = try json_allocator.dupe(u8, value);
+        try cmd_map.object.put(shell_key, .{ .string = cmd_value });
+
+        std.debug.print("cmd:{s} = {s}\n", .{ shell_name, value });
+    } else if (std.mem.eql(u8, property, "scope")) {
+        // Direct scope sets _default supplier
+        const value = args.next() orelse {
+            std.debug.print("Usage: set <query> scope <value>\n", .{});
             std.process.exit(1);
         };
 
         // Warn if named suppliers exist
         if (suppliers.object.count() > 0 and !suppliers.object.contains("_default")) {
-            std.debug.print("Warning: query has named suppliers. Setting {s} uses _default supplier.\n", .{property});
+            std.debug.print("Warning: query has named suppliers. Setting scope uses _default supplier.\n", .{});
         }
 
         // Get or create _default supplier
         if (suppliers.object.getPtr("_default")) |supplier| {
             const new_val = try json_allocator.dupe(u8, value);
-            try supplier.object.put(property, .{ .string = new_val });
+            try supplier.object.put("scope", .{ .string = new_val });
         } else {
             var new_supplier = std.json.ObjectMap.init(json_allocator);
             try new_supplier.put("scope", .{ .string = "." });
-            try new_supplier.put("cmd", .{ .string = "" });
+            const cmd_map = std.json.ObjectMap.init(json_allocator);
+            try new_supplier.put("cmd", .{ .object = cmd_map });
             const new_val = try json_allocator.dupe(u8, value);
-            try new_supplier.put(property, .{ .string = new_val });
+            try new_supplier.put("scope", .{ .string = new_val });
             try suppliers.object.put("_default", .{ .object = new_supplier });
 
             // Also set expr to _default if empty
@@ -116,7 +174,7 @@ fn handleQuerySet(
             }
         }
 
-        std.debug.print("{s} = {s}\n", .{ property, value });
+        std.debug.print("scope = {s}\n", .{value});
     } else if (std.mem.eql(u8, property, "supplier")) {
         const sup_name = args.next() orelse {
             // No name = list suppliers
@@ -126,8 +184,23 @@ fn handleQuerySet(
                 const name = entry.key_ptr.*;
                 const sup = entry.value_ptr.*;
                 const scope = sup.object.get("scope").?.string;
-                const cmd = sup.object.get("cmd").?.string;
-                std.debug.print("  {s}: scope={s} cmd={s}\n", .{ name, scope, if (cmd.len > 0) cmd else "(empty)" });
+                std.debug.print("  {s}: scope={s}\n", .{ name, scope });
+
+                // Print cmd map
+                if (sup.object.get("cmd")) |cmd_val| {
+                    if (cmd_val == .object) {
+                        var cmd_it = cmd_val.object.iterator();
+                        while (cmd_it.next()) |cmd_entry| {
+                            std.debug.print("    {s}: {s}\n", .{ cmd_entry.key_ptr.*, cmd_entry.value_ptr.string });
+                        }
+                        if (cmd_val.object.count() == 0) {
+                            std.debug.print("    (no shell commands)\n", .{});
+                        }
+                    } else if (cmd_val == .string) {
+                        // Legacy format
+                        std.debug.print("    (legacy) {s}\n", .{cmd_val.string});
+                    }
+                }
             }
             if (suppliers.object.count() == 0) {
                 std.debug.print("  (none)\n", .{});
@@ -224,7 +297,7 @@ fn printUsage() void {
         \\Usage: vdir set <name> <property> [args...]
         \\
         \\Query properties:
-        \\  cmd <command>                       Set command (uses _default supplier)
+        \\  cmd:<shell> <command>               Set shell-specific command
         \\  scope <path>                        Set scope (uses _default supplier)
         \\  expr <expression>                   Set boolean expression
         \\  supplier                            List all suppliers
@@ -232,8 +305,14 @@ fn printUsage() void {
         \\  supplier <name> scope <path>        Set named supplier scope
         \\  supplier <name> rm                  Remove supplier
         \\
+        \\Supported shells: bash, zsh, nu, powershell, cmd
+        \\
         \\Reference properties:
         \\  target <path>                       Set target path
+        \\
+        \\Examples:
+        \\  vdir set myquery cmd:bash "rg -l 'TODO' ."
+        \\  vdir set myquery cmd:nu "rg -l 'TODO' (pwd)"
         \\
     , .{});
 }

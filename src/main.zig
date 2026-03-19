@@ -11,6 +11,7 @@ const Command = enum {
     mv,
     info,
     set,
+    compiler,
     help,
 };
 
@@ -29,6 +30,7 @@ fn printUsage() void {
         \\  mv <name> <dest> Rename or move item
         \\  info <name>      Show item details
         \\  set <name> <prop> [args]   Set item property
+        \\  compiler <subcmd>  Manage compilers
         \\  help             Show this help
         \\
         \\Paths:
@@ -68,6 +70,7 @@ pub fn main(init: std.process.Init) !void {
         .mv => try @import("commands/mv.zig").run(io, allocator, &args),
         .info => try @import("commands/info.zig").run(io, allocator, &args),
         .set => try @import("commands/set.zig").run(io, allocator, &args),
+        .compiler => try @import("commands/compiler.zig").run(io, allocator, &args),
         .help => printUsage(),
     }
 }
