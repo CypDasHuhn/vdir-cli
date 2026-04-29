@@ -8,6 +8,15 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Ite
         std.process.exit(1);
     };
 
+    if (name.len == 0) {
+        std.debug.print("Error: name cannot be empty\n", .{});
+        std.process.exit(1);
+    }
+    if (std.mem.indexOfScalar(u8, name, '/') != null) {
+        std.debug.print("Error: name cannot contain '/'\n", .{});
+        std.process.exit(1);
+    }
+
     var vdir_json = try persistence.loadVDir(io, allocator) orelse {
         std.debug.print("No vdir found. Run 'vdir init' first.\n", .{});
         std.process.exit(1);

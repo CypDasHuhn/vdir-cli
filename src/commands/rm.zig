@@ -3,8 +3,20 @@ const persistence = @import("../persistence.zig");
 const pathmod = @import("../path.zig");
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.Iterator) !void {
-    const name = args.next() orelse {
-        std.debug.print("Usage: vdir rm <name>\n", .{});
+    var force = false;
+    var name_opt: ?[]const u8 = null;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--force")) {
+            force = true;
+        } else {
+            name_opt = arg;
+            break;
+        }
+    }
+
+    const name = name_opt orelse {
+        std.debug.print("Usage: vdir rm [--force] <name>\n", .{});
         std.process.exit(1);
     };
 

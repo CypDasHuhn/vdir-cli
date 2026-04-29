@@ -242,14 +242,34 @@ fn handleQuerySet(
         // Get or create this supplier
         const sup_name_owned = try json_allocator.dupe(u8, sup_name);
         if (suppliers.object.getPtr(sup_name)) |supplier| {
-            const new_val = try json_allocator.dupe(u8, sup_value);
-            try supplier.object.put(sup_prop, .{ .string = new_val });
+            if (std.mem.eql(u8, sup_prop, "cmd")) {
+                // Store as shell-keyed object using default shell
+                const default_sh = shell.getDefaultShell();
+                var cmd_map = std.json.ObjectMap.init(json_allocator);
+                const shell_key = try json_allocator.dupe(u8, default_sh.toString());
+                const cmd_val_owned = try json_allocator.dupe(u8, sup_value);
+                try cmd_map.put(shell_key, .{ .string = cmd_val_owned });
+                try supplier.object.put("cmd", .{ .object = cmd_map });
+            } else {
+                const new_val = try json_allocator.dupe(u8, sup_value);
+                try supplier.object.put(sup_prop, .{ .string = new_val });
+            }
         } else {
             var new_supplier = std.json.ObjectMap.init(json_allocator);
             try new_supplier.put("scope", .{ .string = "." });
-            try new_supplier.put("cmd", .{ .string = "" });
-            const new_val = try json_allocator.dupe(u8, sup_value);
-            try new_supplier.put(sup_prop, .{ .string = new_val });
+            if (std.mem.eql(u8, sup_prop, "cmd")) {
+                const default_sh = shell.getDefaultShell();
+                var cmd_map = std.json.ObjectMap.init(json_allocator);
+                const shell_key = try json_allocator.dupe(u8, default_sh.toString());
+                const cmd_val_owned = try json_allocator.dupe(u8, sup_value);
+                try cmd_map.put(shell_key, .{ .string = cmd_val_owned });
+                try new_supplier.put("cmd", .{ .object = cmd_map });
+            } else {
+                const cmd_map = std.json.ObjectMap.init(json_allocator);
+                try new_supplier.put("cmd", .{ .object = cmd_map });
+                const new_val = try json_allocator.dupe(u8, sup_value);
+                try new_supplier.put(sup_prop, .{ .string = new_val });
+            }
             try suppliers.object.put(sup_name_owned, .{ .object = new_supplier });
         }
 

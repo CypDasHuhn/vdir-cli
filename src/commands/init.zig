@@ -9,7 +9,6 @@ pub fn run(io: std.Io) !void {
         if (err == error.FileNotFound) {
             const vdir = types.VDir.init();
             try persistence.saveVDir(io, vdir);
-            try persistence.saveMarker(io, "~");
             std.debug.print("Initialized empty vdir\n", .{});
             return;
         }
@@ -17,4 +16,5 @@ pub fn run(io: std.Io) !void {
     };
 
     std.debug.print("vdir already initialized\n", .{});
+    std.process.exit(1);
 }

@@ -69,6 +69,13 @@ fn handleAdd(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.I
         std.process.exit(1);
     };
 
+    // Validate path exists
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io, path, .{}) catch {
+        std.debug.print("Container not found: {s}\n", .{path});
+        std.process.exit(1);
+    };
+
     try config.addContainer(io, allocator, path);
     std.debug.print("Added container: {s}\n", .{path});
 
@@ -215,7 +222,7 @@ fn handleTest(io: std.Io, allocator: std.mem.Allocator, args: *std.process.Args.
     const container_path = try config.findCompilerContainer(io, allocator, compiler_name) orelse {
         std.debug.print("Compiler not found: {s}\n", .{compiler_name});
         std.debug.print("Use 'vdir compiler list' to see available compilers.\n", .{});
-        return;
+        std.process.exit(1);
     };
     defer allocator.free(container_path);
 
