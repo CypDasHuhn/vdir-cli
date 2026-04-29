@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Command = enum {
     init,
+    pwd,
     cd,
     ls,
     mkdir,
@@ -21,6 +22,7 @@ fn printUsage() void {
         \\
         \\Commands:
         \\  init             Initialize a new vdir in current directory
+        \\  pwd              Print the current marker path
         \\  cd <path>        Change marker to directory
         \\  ls [-a] [-l] [-r[N]]  List items (-a=hidden, -l=long, -r=recursive)
         \\  mkdir <name>     Create a folder
@@ -61,6 +63,7 @@ pub fn main(init: std.process.Init) !void {
 
     switch (cmd) {
         .init => try @import("commands/init.zig").run(io),
+        .pwd => try @import("commands/pwd.zig").run(io, allocator),
         .cd => try @import("commands/cd.zig").run(io, allocator, &args),
         .ls => try @import("commands/ls.zig").run(io, allocator, &args),
         .mkdir => try @import("commands/mkdir.zig").run(io, allocator, &args),
